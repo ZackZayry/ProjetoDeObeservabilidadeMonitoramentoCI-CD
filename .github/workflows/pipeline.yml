@@ -1,0 +1,87 @@
+name: Pipeline CI/CD
+
+# Dispara a cada push ou pull request nas branches principais
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+# Princípio do menor privilégio: o pipeline só precisa ler o repositório
+permissions:
+  contents: read
+
+# Cancela execuções antigas da mesma branch quando chega um commit novo
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '17'
+  IMAGE_NAME: bikes-api
+
+jobs:
+  # ==========================================================
+  # JOB 1: Compilação e Testes (roda em push e em pull request)
+  # ==========================================================
+  compilacao-e-testes:
+    name: Compilação e Testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven            # guarda ~/.m2 entre execuções para acelerar o build
+
+      - name: Compilar e executar os testes
+        run: mvn --batch-mode --no-transfer-progress clean test
+
+      - name: Publicar relatórios de teste
+        if: always()              # envia os relatórios mesmo quando algum teste falha
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorios-de-teste
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+
+  # ==========================================================
+  # JOB 2: Build e Push da imagem Docker (só depois dos testes)
+  # ==========================================================
+  build-e-push:
+    name: Build e Push da Imagem Docker
+    needs: compilacao-e-testes
+    # Só publica em push. Em pull request o pipeline valida o código, mas não publica imagem
+    # (PRs de forks não têm acesso aos secrets e não devem gerar imagens no Docker Hub).
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login no Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build e Push (Dockerfile multistage da raiz)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
