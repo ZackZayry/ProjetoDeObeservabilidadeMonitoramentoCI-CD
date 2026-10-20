@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inventário do Aventureiro · D&amp;D</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topo">
+  <div>
+    <h1>🎒 Inventário do Aventureiro</h1>
+    <p class="sub">API REST de D&amp;D · Spring Boot · observabilidade em tempo real</p>
+  </div>
+  <nav class="links" aria-label="Links úteis">
+    <a href="/actuator/health" target="_blank" rel="noopener">/actuator/health</a>
+    <a href="/actuator/prometheus" target="_blank" rel="noopener">/actuator/prometheus</a>
+    <a href="/h2-console" target="_blank" rel="noopener">H2 Console</a>
+  </nav>
+</header>
+
+<nav class="abas" role="tablist">
+  <button class="aba-btn ativa" data-aba="inventario" role="tab">📦 Inventário</button>
+  <button class="aba-btn" data-aba="observabilidade" role="tab">📈 Observabilidade &amp; Caos</button>
+</nav>
+
+<main>
+  <!-- ========== ABA 1: INVENTÁRIO ========== -->
+  <section id="aba-inventario" class="aba ativa">
+    <div class="dica">
+      <strong>💡 Como ler esta tela:</strong> cada botão chama um endpoint da API (<code>GET</code>, <code>POST</code>,
+      <code>PUT</code>, <code>DELETE</code>). No painel <em>Atividade</em>, no rodapé, você vê a requisição feita,
+      o código HTTP devolvido e o <strong>nível de log</strong> que ela gera no Graylog.
+    </div>
+
+    <div class="resumo">
+      <div class="cartao"><span class="rotulo">Tipos de item</span><span class="valor" id="stat-itens">0</span></div>
+      <div class="cartao"><span class="rotulo">Peso total</span><span class="valor" id="stat-peso">0 lb</span></div>
+      <div class="cartao"><span class="rotulo">Valor total</span><span class="valor" id="stat-valor">0 po</span></div>
+    </div>
+
+    <div class="barra">
+      <input id="busca" type="search" placeholder="Buscar por nome ou descrição…" aria-label="Buscar">
+      <select id="filtro-categoria" aria-label="Filtrar por categoria">
+        <option value="">Todas as categorias</option>
+        <option value="ARMA">⚔️ Arma</option>
+        <option value="ARMADURA">🛡️ Armadura</option>
+        <option value="POCAO">🧪 Poção</option>
+        <option value="MARAVILHOSO">✨ Maravilhoso</option>
+      </select>
+      <button id="btn-novo" class="primario">+ Novo item</button>
+    </div>
+
+    <div class="tabela-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th><th>Categoria</th><th>Raridade</th>
+            <th class="num">Peso (lb)</th><th class="num">Preço (po)</th>
+            <th class="num">Qtd</th><th class="num">Valor total</th><th class="acoes">Ações</th>
+          </tr>
+        </thead>
+        <tbody id="corpo-tabela"></tbody>
+      </table>
+      <p id="vazio" class="vazio" hidden>Nenhum item encontrado. Que tal adicionar um? 🗡️</p>
+    </div>
+  </section>
+
+  <!-- ========== ABA 2: OBSERVABILIDADE ========== -->
+  <section id="aba-observabilidade" class="aba">
+    <div class="dica">
+      <strong>💡 Como ler esta tela:</strong> os gráficos leem o endpoint <code>/actuator/prometheus</code> a cada
+      2 segundos, os mesmos dados que o Prometheus coleta para o Grafana. Use os botões de caos abaixo e veja os
+      gráficos reagirem.
+    </div>
+
+    <div class="grade">
+      <div class="cartao grafico">
+        <div class="cab"><h3>CPU do processo</h3><span class="valor" id="v-cpu">–</span></div>
+        <canvas id="graf-cpu"></canvas>
+        <small>Métrica: <code>process_cpu_usage</code></small>
+      </div>
+      <div class="cartao grafico">
+        <div class="cab"><h3>Memória heap da JVM</h3><span class="valor" id="v-heap">–</span></div>
+        <canvas id="graf-heap"></canvas>
+        <small>Métrica: <code>jvm_memory_used_bytes{area="heap"}</code></small>
+      </div>
+    </div>
+
+    <div class="resumo">
+      <div class="cartao"><span class="rotulo">Threads ativas</span><span class="valor" id="v-threads">–</span></div>
+      <div class="cartao"><span class="rotulo">Uptime</span><span class="valor" id="v-uptime">–</span></div>
+      <div class="cartao status ok"><span class="rotulo">Respostas 2xx</span><span class="valor" id="v-2xx">0</span></div>
+      <div class="cartao status cli"><span class="rotulo">Respostas 4xx</span><span class="valor" id="v-4xx">0</span></div>
+      <div class="cartao status srv"><span class="rotulo">Respostas 5xx</span><span class="valor" id="v-5xx">0</span></div>
+    </div>
+
+    <h2>🔥 Painel de caos</h2>
+    <div class="grade caos">
+      <div class="cartao">
+        <h3>Estresse de CPU</h3>
+        <p>Calcula números primos por força bruta.</p>
+        <div class="campos">
+          <label>Segundos <input type="number" id="cpu-seg" value="8" min="1" max="60"></label>
+          <label>Threads <input type="number" id="cpu-thr" value="1" min="1"></label>
+        </div>
+        <button class="perigo" id="btn-cpu">Estressar CPU</button>
+      </div>
+      <div class="cartao">
+        <h3>Pico de memória</h3>
+        <p>Aloca blocos de 1 MB no heap e os segura por um tempo.</p>
+        <div class="campos">
+          <label>Megabytes <input type="number" id="mem-mb" value="200" min="1" max="1024"></label>
+          <label>Segundos <input type="number" id="mem-seg" value="10" min="1" max="60"></label>
+        </div>
+        <button class="perigo" id="btn-mem">Alocar memória</button>
+      </div>
+      <div class="cartao">
+        <h3>Erros HTTP</h3>
+        <p>Dispara respostas 400 ou 500 propositais.</p>
+        <div class="campos">
+          <label>Repetições <input type="number" id="err-qtd" value="5" min="1" max="100"></label>
+        </div>
+        <div class="linha-botoes">
+          <button class="aviso" id="btn-400">Gerar 400</button>
+          <button class="perigo" id="btn-500">Gerar 500</button>
+        </div>
+      </div>
+      <div class="cartao">
+        <h3>Remover ID inexistente</h3>
+        <p>Chama <code>DELETE /api/itens/9999</code>: 404 e log <span class="nivel ERROR">ERROR</span>.</p>
+        <button class="aviso" id="btn-404">Tentar remover</button>
+      </div>
+    </div>
+
+    <h2>🛣️ Requisições por endpoint</h2>
+    <div class="tabela-wrap">
+      <table>
+        <thead><tr><th>Método</th><th>URI</th><th>Status</th><th class="num">Total</th><th class="num">Tempo médio</th></tr></thead>
+        <tbody id="corpo-http"></tbody>
+      </table>
+      <p id="vazio-http" class="vazio">Ainda não há requisições registradas.</p>
+    </div>
+  </section>
+</main>
+
+<!-- ========== PAINEL DE ATIVIDADE (visível nas duas abas) ========== -->
+<details class="atividade" open>
+  <summary>📜 Atividade: requisições feitas por esta tela e o log que cada uma gera</summary>
+  <ul id="lista-atividade"></ul>
+</details>
+
+<!-- ========== FORMULÁRIO (modal) ========== -->
+<dialog id="dlg">
+  <form id="form-item" novalidate>
+    <h2 id="dlg-titulo">Novo item</h2>
+    <label>Nome <input name="nome" required maxlength="100"></label>
+    <label>Descrição <textarea name="descricao" rows="2" maxlength="500"></textarea></label>
+    <div class="duas">
+      <label>Categoria
+        <select name="categoria" required>
+          <option value="ARMA">⚔️ Arma</option>
+          <option value="ARMADURA">🛡️ Armadura</option>
+          <option value="POCAO">🧪 Poção</option>
+          <option value="MARAVILHOSO">✨ Maravilhoso</option>
+        </select>
+      </label>
+      <label>Raridade
+        <select name="raridade" required>
+          <option value="COMUM">Comum</option>
+          <option value="INCOMUM">Incomum</option>
+          <option value="RARO">Raro</option>
+          <option value="MUITO_RARO">Muito raro</option>
+          <option value="LENDARIO">Lendário</option>
+        </select>
+      </label>
+    </div>
+    <div class="tres">
+      <label>Peso (lb) <input name="peso" type="number" step="0.1" min="0" required></label>
+      <label>Preço (po) <input name="precoEmOuro" type="number" step="0.01" min="0" required></label>
+      <label>Quantidade <input name="quantidade" type="number" step="1" min="0" required></label>
+    </div>
+    <p id="erro-form" class="erro" hidden></p>
+    <div class="linha-botoes fim">
+      <button type="button" id="btn-cancelar">Cancelar</button>
+      <button type="submit" class="primario">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
