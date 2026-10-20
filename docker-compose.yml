@@ -1,0 +1,137 @@
+services:
+  # 1. Banco de Dados MySQL
+  db:
+    image: mysql:8.0
+    container_name: bikes-mysql
+    environment:
+      MYSQL_DATABASE: bikes
+      MYSQL_ROOT_PASSWORD: mysql
+    ports:
+      - "4406:3306"
+    healthcheck:
+      # -h 127.0.0.1 força TCP: com "localhost" o ping usa o socket e responde OK durante a
+      # inicialização, antes de o MySQL realmente aceitar conexões da aplicação.
+      test: [ "CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # 2. Aplicação Java Spring
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bikes-api
+    ports:
+      - "7080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=mysql,graylog   # mysql: application-mysql.properties (padrão é H2); graylog: liga o envio GELF
+      - DB_HOST=db
+      - GRAYLOG_HOST=graylog           # destino dos logs GELF
+      - JAVA_OPTS=-Xmx512m             # heap limitado: o pico do /api/chaos/memory fica visível no Grafana
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  # 3. Prometheus (Coletor de Métricas)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - app
+
+  # 4. Grafana (Dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_DEFAULT_LANGUAGE=pt-BR
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  # 5. Banco de Dados do Graylog (Metadados)
+  mongodb:
+    image: mongo:6.0
+    container_name: graylog-mongodb
+    restart: "on-failure"
+
+  # 6. Motor de Busca (Armazena os logs)
+  opensearch:
+    image: opensearchproject/opensearch:2.11.1
+    container_name: graylog-opensearch
+    environment:
+      - "discovery.type=single-node"
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  # 7. Graylog (A interface e processador de logs)
+  graylog:
+    image: graylog/graylog:5.2
+    container_name: graylog
+    environment:
+      - GRAYLOG_PASSWORD_SECRET=UmaSenhaSecretaQualquerComMaisDe16Caracteres123
+      # SHA-256 da senha "admin" (login: admin / admin)
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9500/
+      - GRAYLOG_MONGODB_URI=mongodb://graylog-mongodb:27017/graylog
+      - GRAYLOG_ELASTICSEARCH_HOSTS=http://graylog-opensearch:9200
+      - GRAYLOG_ROOT_TIMEZONE=America/Sao_Paulo
+    depends_on:
+      mongodb:
+        condition: service_started
+      opensearch:
+        condition: service_healthy
+    restart: on-failure
+    ports:
+      - "9500:9000"
+      - "12201:12201/udp"
+
+  # 8. Cria sozinho o input "GELF UDP" no Graylog (sem ele, os logs da aplicação são descartados).
+  #    Roda uma vez e termina; ao reiniciar o compose, não duplica o input.
+  graylog-input:
+    image: curlimages/curl:latest
+    container_name: graylog-input-init
+    depends_on:
+      - graylog
+    restart: "no"
+    entrypoint: [ "/bin/sh", "-c" ]
+    command:
+      - |
+        until curl -fs http://graylog:9000/api/system/lbstatus > /dev/null; do echo "aguardando Graylog..."; sleep 5; done
+        if curl -fs -u admin:admin http://graylog:9000/api/system/inputs | grep -q "GELF UDP"; then
+          echo "Input GELF UDP ja existe"
+        else
+          until curl -fs -u admin:admin -H "Content-Type: application/json" -H "X-Requested-By: compose" \
+            -X POST http://graylog:9000/api/system/inputs \
+            -d '{"title":"GELF UDP","type":"org.graylog2.inputs.gelf.udp.GELFUDPInput","global":true,"configuration":{"bind_address":"0.0.0.0","port":12201,"recv_buffer_size":262144,"decompress_size_limit":8388608}}'; do
+            echo "tentando criar o input..."; sleep 5
+          done
+          echo "Input GELF UDP criado"
+        fi
+
+volumes:
+  grafana-storage:
